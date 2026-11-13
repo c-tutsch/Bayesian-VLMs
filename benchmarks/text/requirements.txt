@@ -1,0 +1,1 @@
+vllm  # Linux + CUDA only; brings its own torch and transformers

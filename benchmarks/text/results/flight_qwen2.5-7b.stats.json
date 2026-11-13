@@ -1,0 +1,47 @@
+{
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "thinking": false,
+  "eval": {
+    "0": {
+      "parse_fail": 0.0,
+      "accuracy": 0.3462980769230769
+    },
+    "1": {
+      "parse_fail": 0.0,
+      "accuracy": 0.3585096153846154
+    },
+    "2": {
+      "parse_fail": 0.0,
+      "accuracy": 0.358349358974359
+    },
+    "3": {
+      "parse_fail": 0.0,
+      "accuracy": 0.3632852564102564
+    },
+    "4": {
+      "parse_fail": 0.0,
+      "accuracy": 0.35713141025641026
+    },
+    "5": {
+      "parse_fail": 0.0,
+      "accuracy": 0.35907051282051283
+    }
+  },
+  "interaction": {
+    "1": {
+      "parse_fail": 0.0
+    },
+    "2": {
+      "parse_fail": 0.0
+    },
+    "3": {
+      "parse_fail": 0.0
+    },
+    "4": {
+      "parse_fail": 0.0
+    },
+    "5": {
+      "parse_fail": 0.0
+    }
+  }
+}
