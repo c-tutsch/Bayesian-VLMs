@@ -219,5 +219,13 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Original datasets stay local, separate from source and test fixtures.
+data/raw/*
+!data/raw/.gitkeep
+
+# Generated exports, simulation and model checkpoints
+data/generated/
+outputs/
+
 # File system
 .DS_Store
