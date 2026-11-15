@@ -2,6 +2,8 @@
 
 **Multimodal Artificial Intelligence Project Lab | TU Darmstadt | Winter Semester 2026/27**
 
+To build the flight benchmark PNGs after cloning, follow the [OCR card setup](#generate-ocr-benchmark-cards).
+
 ## Overview
 
 This research project investigates whether Bayesian teaching can improve belief updating in Vision-Language Models (VLMs) and how well these improvements generalize to unseen visual tasks.
@@ -93,8 +95,9 @@ text baseline remain open.
 
 ### Start locally (Python 3.9+, no extra packages)
 
-Source: [Zenodo 17677329, data.zip](https://zenodo.org/records/17677329), MD5
-`a341ca74418ed9152a31cc3f91e261dd`. From a fresh clone, download once:
+For the text preview and teaching dialogue export, download the original
+[Zenodo archive](https://zenodo.org/records/17677329) once. Its MD5 is
+`a341ca74418ed9152a31cc3f91e261dd`.
 
 ```bash
 mkdir -p data/raw
@@ -149,12 +152,12 @@ Import from `src` (`PYTHONPATH=src`):
 
 ### Generate OCR benchmark cards
 
-Open `generate_ocr_cards.py` in VS Code and click **Run Python File in
-Terminal**. With no arguments, it uses `data/generated/ocr/` for the full set
-of 100 shared held-out cards and 3,120 interaction cards. If the matching
-manifest and all PNGs already exist, it prints where to find them.
+The generator reads the original flight JSON files already included under
+[the text benchmark's data directory](benchmarks/text/data/eval). You can
+generate all 3,220 PNGs from a fresh checkout without the Zenodo download.
 
-For a fresh setup, install Pillow once into the project's Python environment:
+From the repository root, create a Python environment, install Pillow, and
+run the generator:
 
 ```bash
 python3 -m venv .venv
@@ -162,9 +165,14 @@ python3 -m venv .venv
 .venv/bin/python generate_ocr_cards.py
 ```
 
-Browse `heldout/set-001.png` for a test offer or `interaction/user-000/`
-for all five observed offers for user 0. Each PNG shows three flight options.
-Use `--out` to choose a fresh directory if you need to regenerate the set.
+In VS Code, you can also select the environment with Pillow, open
+`generate_ocr_cards.py`, and click **Run Python File in Terminal**.
+
+Find the output under `data/generated/ocr/`. It contains 100 shared test
+cards in `heldout/` and 3,120 earlier offers in `interaction/`. Each PNG
+shows three flight options. If the matching manifest and all PNGs already
+exist, the script prints where to find them. To regenerate the cards in a
+new directory, pass `--out`.
 
 Each `manifest.jsonl` row maps a PNG to its exact original option strings and
 IDs (`set` for shared test cards, `user` and zero-based `round` for interaction
@@ -173,9 +181,8 @@ feedback to the dialogue separately. The cards and manifest contain only the
 options. The PNGs use the same four-feature data as
 [the cluster text benchmark](benchmarks/text/README.md).
 
-Git tracks the generator and its requirements. The local Zenodo archive, PNGs
-and manifest are ignored. Run the generator once on each checkout that needs
-the images. For an image evaluation, use the manifest to select each PNG, send
+Run the generator once in each working copy where you need the images. For an
+image evaluation, use the manifest to select each PNG, send
 the PNG and question to an image-capable model, and write the same prediction
 fields as the text benchmark. Keep the `options` strings for the text condition.
 
