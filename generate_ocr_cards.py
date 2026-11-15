@@ -80,7 +80,7 @@ def main():
     args = parser.parse_args()
     output = (args.out or ROOT / "data/generated/ocr").resolve()
     try:
-        data = PaperDataset()
+        data = PaperDataset(ROOT / "benchmarks/text/data")
         if args.out is None and output.is_dir():
             count = check_existing_cards(data, output)
             print(f"All {count:,} PNG cards are already available in {output}")
