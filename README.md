@@ -2,7 +2,8 @@
 
 **Multimodal Artificial Intelligence Project Lab | TU Darmstadt | Winter Semester 2026/27**
 
-To build the flight benchmark PNGs after cloning, follow the [OCR card setup](#generate-ocr-benchmark-cards).
+To build the flight benchmark PNGs, see the [OCR card setup](#generate-ocr-benchmark-cards)
+and [diagram cards](#generate-diagram-cards-and-cards-with-noise-bvlm-78).
 
 ## Overview
 
@@ -185,6 +186,35 @@ Run the generator once in each working copy where you need the images. For an
 image evaluation, use the manifest to select each PNG, send
 the PNG and question to an image-capable model, and write the same prediction
 fields as the text benchmark. Keep the `options` strings for the text condition.
+
+### Generate diagram cards and cards with noise (BVLM-7/8)
+
+Install Pillow with the [OCR setup above](#generate-ocr-benchmark-cards).
+From the repository root, run:
+
+```bash
+.venv/bin/python generate_ocr_cards.py
+.venv/bin/python generate_diagram_cards.py
+```
+
+You can also open either script in VS Code and click **Run Python File in
+Terminal**. The scripts use the flight JSON already included in the repo.
+Each output directory contains 3,220 cards, arranged as 100 held-out offers
+and 3,120 earlier interaction offers.
+
+- `data/generated/ocr/` contains the original flight descriptions as images.
+- `data/generated/diagrams/` shows the same three flights using four charts.
+  Departure time and stops are plotted as dots, duration and price as bars.
+  The axes are fixed across cards.
+- `data/generated/diagrams-noise/` adds two unrelated notices and one unrelated
+  chart. The flight charts have the same pixels and positions as the clean
+  cards. The card path seeds the selection of distractors.
+
+All three formats use the same image paths and manifest rows, including
+`heldout/set-001.png` and `interaction/user-000/round-0.png`. The manifest
+preserves the three original flight descriptions per offer. To generate
+diagram cards in a new parent directory, pass `--out` to the diagram generator.
+The two diagram sets will be written into that directory.
 
 ### Training data and validation
 

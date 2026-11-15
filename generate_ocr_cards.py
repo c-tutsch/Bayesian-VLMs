@@ -26,41 +26,51 @@ def card_rows(data):
             }
 
 
-def write_cards(data, output):
-    from PIL import Image, ImageDraw, ImageFont
+def render_ocr_card(row, font):
+    from PIL import Image, ImageDraw
 
+    margin, line_height, option_gap = 36, 39, 18
+    # Keep the original wording, adding only line breaks for the image.
+    blocks = [text.replace(", number of stops:", ",\nnumber of stops:") for text in row["options"]]
+    lines = [line for block in blocks for line in block.splitlines()]
+    width = max(font.getbbox(line)[2] for line in lines) + 2 * margin
+    height = 2 * margin + len(lines) * line_height + (len(blocks) - 1) * option_gap
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    y = margin
+    for block in blocks:
+        for line in block.splitlines():
+            draw.text((margin, y), line, font=font, fill="black", anchor="lt")
+            y += line_height
+        y += option_gap
+    return image
+
+
+def write_card_images(data, output, render):
     if output.exists():
         raise FileExistsError(f"Choose a new output directory: {output}")
 
-    font = ImageFont.load_default(size=28)
-    margin, line_height, option_gap = 36, 39, 18
     output.parent.mkdir(parents=True, exist_ok=True)
     count = 0
-    with TemporaryDirectory(prefix=".ocr-", dir=output.parent) as temporary:
+    with TemporaryDirectory(prefix=".flight-cards-", dir=output.parent) as temporary:
         staged = Path(temporary) / "cards"
         staged.mkdir()
         with (staged / "manifest.jsonl").open("w", encoding="utf-8") as manifest:
             for row in card_rows(data):
-                # Keep the original wording, adding only line breaks for the image.
-                blocks = [text.replace(", number of stops:", ",\nnumber of stops:") for text in row["options"]]
-                lines = [line for block in blocks for line in block.splitlines()]
-                width = max(font.getbbox(line)[2] for line in lines) + 2 * margin
-                height = 2 * margin + len(lines) * line_height + (len(blocks) - 1) * option_gap
-                image = Image.new("RGB", (width, height), "white")
-                draw = ImageDraw.Draw(image)
-                y = margin
-                for block in blocks:
-                    for line in block.splitlines():
-                        draw.text((margin, y), line, font=font, fill="black", anchor="lt")
-                        y += line_height
-                    y += option_gap
                 target = staged / row["path"]
                 target.parent.mkdir(parents=True, exist_ok=True)
-                image.save(target, format="PNG")
+                render(row).save(target, format="PNG")
                 manifest.write(json.dumps(row) + "\n")
                 count += 1
         staged.rename(output)
     return count
+
+
+def write_cards(data, output):
+    from PIL import ImageFont
+
+    font = ImageFont.load_default(size=28)
+    return write_card_images(data, output, lambda row: render_ocr_card(row, font))
 
 
 def check_existing_cards(data, output):
@@ -70,6 +80,15 @@ def check_existing_cards(data, output):
     if actual != expected or any(not (output / row["path"]).is_file() for row in expected):
         raise ValueError(f"Incomplete or outdated card set: {output}. Choose a new folder with --out.")
     return len(expected)
+
+
+def pillow_required(parser):
+    # VS Code can start the system interpreter even after the repo venv was created.
+    environment = ROOT / ".venv"
+    python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if python.is_file() and Path(sys.prefix).resolve() != environment.resolve():
+        os.execv(str(python), [str(python), str(Path(sys.argv[0]).resolve()), *sys.argv[1:]])
+    parser.exit(2, "Install Pillow first: python3 -m pip install -r requirements-ocr.txt\n")
 
 
 def main():
@@ -88,12 +107,7 @@ def main():
             count = write_cards(data, output)
             print(f"{count:,} PNG cards written to {output}")
     except ImportError:
-        # VS Code can start the system interpreter even after the repo venv was created.
-        environment = ROOT / ".venv"
-        python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        if python.is_file() and Path(sys.prefix).resolve() != environment.resolve():
-            os.execv(str(python), [str(python), str(Path(__file__).resolve()), *sys.argv[1:]])
-        parser.exit(2, "Install Pillow first: python3 -m pip install -r requirements-ocr.txt\n")
+        pillow_required(parser)
     except (OSError, ValueError) as error:
         parser.exit(2, f"Cannot generate OCR cards: {error}\n")
     print(f"Test cards: {output / 'heldout'}")
