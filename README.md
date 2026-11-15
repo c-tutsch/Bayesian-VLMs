@@ -216,6 +216,39 @@ preserves the three original flight descriptions per offer. To generate
 diagram cards in a new parent directory, pass `--out` to the diagram generator.
 The two diagram sets will be written into that directory.
 
+### Compare four flight input formats (BVLM-14)
+
+Start [Ollama](https://docs.ollama.com/macos) and download the model once with
+`ollama pull qwen3.5:9b`. Generate all three picture sets as described above.
+From the repository root, run:
+
+```bash
+python3 benchmarks/visual/run_flight_pair.py --all-formats --model qwen3.5:9b \
+  --users 0 623 --sets 1 2 3 4 5 --n-obs 0 2 5 \
+  --out data/generated/bvlm-14-four-formats-qwen9b
+```
+
+This sends 30 matched cases to the same model in each of the four formats.
+Earlier user choices remain in the text of every prompt. Only the flight
+offers change representation. The held-out choice is used for scoring.
+
+- `text.jsonl`, `ocr.jsonl`, `diagrams.jsonl` and `diagrams-noise.jsonl`
+  contain valid predictions in the team schema. All IDs and `rec` are zero-based.
+- `responses.jsonl` keeps every raw reply and its timing, including invalid
+  replies. Invalid replies count as incorrect.
+- `summary.json` reports accuracy and agreement with text overall and by
+  the number of earlier observations. `run.json` records model and run settings.
+
+You can add `--bayes-reference PATH` to compare with a previously computed
+Bayesian reference. Use a JSON list with `user`, `n_obs`, `set`, `target`
+and `bayes_recs` (a list of optimal zero-based flight indices) for each
+case. The summary reports model agreement only on uniquely recommended cases.
+Bayes accuracy uses the expected score under uniform tie-breaking.
+
+Omit `--all-formats` for the original text/OCR pilot. Its default case is
+user 0, test set 1 with two earlier choices. Use a new output directory for
+each run. This pilot supplies fixed histories to all formats.
+
 ### Training data and validation
 
 `prepare_training.py` validates and copies the two official teacher files to
