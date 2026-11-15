@@ -186,6 +186,37 @@ image evaluation, use the manifest to select each PNG, send
 the PNG and question to an image-capable model, and write the same prediction
 fields as the text benchmark. Keep the `options` strings for the text condition.
 
+### Run the paired flight pilot (BVLM-14)
+
+Start [Ollama](https://docs.ollama.com/macos) and download the model once with
+`ollama pull qwen3.5:4b`. Generate the OCR cards using the steps above. From
+the repository root, run one case:
+
+```bash
+python3 benchmarks/visual/run_flight_pair.py --out data/generated/flight-pair-demo
+```
+
+The default case is user 0, test set 1 and two earlier choices. Both calls use
+the same model, question and recorded choices. The text call sends the original
+flight descriptions. The OCR call attaches the matching cards, one per offer,
+with the earlier choice feedback still in text. Both runs ask for a flight
+number in JSON. The runner looks up the test choice for scoring after prediction.
+
+To run the 30 paired pilot cases, use the same command with
+`--users 0 623 --sets 1 2 3 4 5 --n-obs 0 2 5` and a new output path.
+The IDs for users, test sets and recommendations in JSONL are zero-based.
+
+- `text.jsonl` and `ocr.jsonl` contain the predictions in the team schema.
+- `responses.jsonl` retains the original replies and timings. If a response
+  cannot be parsed, it stays in this file and counts as incorrect in the summary.
+- `summary.json` reports accuracy against stored choices and how often the
+  two input formats produce the same recommendation.
+- `run.json` records the model digest, Ollama version and settings.
+
+The pilot supplies fixed observations to both calls. The full paper benchmark
+builds the interaction step by step using the model's own recommendations.
+Choose a new output directory for each run.
+
 ### Training data and validation
 
 `prepare_training.py` validates and copies the two official teacher files to
