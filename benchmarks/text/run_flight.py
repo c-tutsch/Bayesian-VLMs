@@ -28,6 +28,11 @@ INTRO = (
 )
 END_OF_THOUGHT = re.compile(r"</think>|<channel\|>")  # Qwen / Gemma 4
 
+# Without thinking, the assistant turn is pre-filled with the answer format from Table H3 and the model only
+# completes the flight number. Free generation (Qwen2.5-7B writes long analyses) was mostly unparseable.
+# Thinking models need room to reason first, so they generate freely and the parser picks the answer.
+PREFILL = "The best option is Flight"
+
 p = argparse.ArgumentParser()
 p.add_argument("--model", default="Qwen/Qwen2.5-7B-Instruct")
 p.add_argument("--out", required=True)
@@ -51,7 +56,6 @@ p.add_argument(
     help="first N users only (output then fails the 374,400-line check)",
 )
 p.add_argument("--dry-run", action="store_true")
-args = p.parse_args()
 
 
 def question(options):
@@ -79,24 +83,33 @@ def parse(text):
 assert parse("The best option is Flight 3.") == 2
 assert parse("The best option is **Flight 2**, because Flight 1 is too long.") == 1
 assert parse("Flight 1 is the best choice for you.") == 0
-assert parse("Given your preferences, **Flight 2** appears to be the best option. It has no stops.") == 1
+assert (
+    parse(
+        "Given your preferences, **Flight 2** appears to be the best option. It has no stops."
+    )
+    == 1
+)
 assert parse("Flight 2 is cheap but Flight 3 is shorter.") is None
 assert parse("I need more information.") is None
 
 
-# Without thinking, the assistant turn is pre-filled with the answer format from Table H3 and the model only
-# completes the flight number. Free generation (Qwen2.5-7B writes long analyses) was mostly unparseable.
-# Thinking models need room to reason first, so they generate freely and the parser picks the answer.
-PREFILL = "The best option is Flight"
-
-
-def make_generate():
+def make_generate(args):
     if args.dry_run:
         fake_rng = random.Random(1)
-        fakes = [" {}.", " {}.", " none."] if not args.thinking else [
-            "The best option is Flight {}.", "I'd go with **Flight {}**.", "Hard to say."]
+        fakes = (
+            [" {}.", " {}.", " none."]
+            if not args.thinking
+            else [
+                "The best option is Flight {}.",
+                "I'd go with **Flight {}**.",
+                "Hard to say.",
+            ]
+        )
         prefix = "" if args.thinking else PREFILL
-        return lambda convs: [prefix + fake_rng.choice(fakes).format(fake_rng.randint(1, 3)) for _ in convs]
+        return lambda convs: [
+            prefix + fake_rng.choice(fakes).format(fake_rng.randint(1, 3))
+            for _ in convs
+        ]
     from vllm import LLM, SamplingParams
 
     llm = LLM(
@@ -105,127 +118,162 @@ def make_generate():
         tensor_parallel_size=args.tp,
         max_model_len=args.max_model_len,
         seed=args.seed,
+        mamba_cache_mode="align",  # prefix caching for hybrid models (Qwen3.5); ignored by plain transformers
     )
     # No system message: each model's chat template applies its own default (Qwen2.5 inserts one).
     kw = {"enable_thinking": args.thinking}  # templates without this variable ignore it
     if args.thinking:
-        sp = SamplingParams(temperature=0, max_tokens=args.max_new_tokens)  # greedy, as in the paper
-        return lambda convs: [o.outputs[0].text for o in llm.chat(convs, sp, chat_template_kwargs=kw, use_tqdm=True)]
-    sp = SamplingParams(temperature=0, max_tokens=4, stop=["."], include_stop_str_in_output=True)
+        sp = SamplingParams(
+            temperature=0, max_tokens=args.max_new_tokens
+        )  # greedy, as in the paper
+        return lambda convs: [
+            o.outputs[0].text
+            for o in llm.chat(convs, sp, chat_template_kwargs=kw, use_tqdm=True)
+        ]
+    sp = SamplingParams(
+        temperature=0, max_tokens=4, stop=["."], include_stop_str_in_output=True
+    )
     return lambda convs: [
         PREFILL + o.outputs[0].text
         for o in llm.chat(
-            [c + [{"role": "assistant", "content": PREFILL}] for c in convs], sp,
-            add_generation_prompt=False, continue_final_message=True, chat_template_kwargs=kw, use_tqdm=True,
+            [c + [{"role": "assistant", "content": PREFILL}] for c in convs],
+            sp,
+            add_generation_prompt=False,
+            continue_final_message=True,
+            chat_template_kwargs=kw,
+            use_tqdm=True,
         )
     ]
 
 
-generate = make_generate()
+def main():
+    args = p.parse_args()
+    generate = make_generate(args)
 
+    def run(convs):
+        # Greedy, so identical prompts give identical answers: n_obs=0 has only 100 unique prompts, not 62,400.
+        keys = [json.dumps(c) for c in convs]
+        uniq = list(dict.fromkeys(keys))
+        outs = dict(zip(uniq, generate([json.loads(k) for k in uniq])))
+        return [outs[k] for k in keys]
 
-def run(convs):
-    # Greedy, so identical prompts give identical answers: n_obs=0 has only 100 unique prompts, not 62,400.
-    keys = [json.dumps(c) for c in convs]
-    uniq = list(dict.fromkeys(keys))
-    outs = dict(zip(uniq, generate([json.loads(k) for k in uniq])))
-    return [outs[k] for k in keys]
+    rows = [json.loads(line) for line in open(args.interaction)][: args.limit_users]
+    held = json.load(open(args.heldout))
+    sets, labels = held["all_options"], [u["idxs"] for u in held["user_idxs"]]
+    assert all(
+        r["reward_fn"] == u["reward_fn"] for r, u in zip(rows, held["user_idxs"])
+    ), "user order mismatch"
 
+    rng = random.Random(args.seed)
+    hist = [
+        [] for _ in rows
+    ]  # main conversation per user (never contains eval branches)
+    pending = [INTRO + "\n\n"] * len(
+        rows
+    )  # text that starts the next user message (intro or last feedback)
+    stats = {
+        "model": args.model,
+        "thinking": args.thinking,
+        "eval": {},
+        "interaction": {},
+    }
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    stem = str(out).removesuffix(
+        ".jsonl"
+    )  # not with_suffix: model names contain dots (qwen2.5-7b)
 
-rows = [json.loads(line) for line in open(args.interaction)][: args.limit_users]
-held = json.load(open(args.heldout))
-sets, labels = held["all_options"], [u["idxs"] for u in held["user_idxs"]]
-assert all(r["reward_fn"] == u["reward_fn"] for r, u in zip(rows, held["user_idxs"])), (
-    "user order mismatch"
-)
-
-rng = random.Random(args.seed)
-hist = [[] for _ in rows]  # main conversation per user (never contains eval branches)
-pending = [INTRO + "\n\n"] * len(
-    rows
-)  # text that starts the next user message (intro or last feedback)
-stats = {"model": args.model, "thinking": args.thinking, "eval": {}, "interaction": {}}
-out = Path(args.out)
-out.parent.mkdir(parents=True, exist_ok=True)
-stem = str(out).removesuffix(".jsonl")  # not with_suffix: model names contain dots (qwen2.5-7b)
-
-with open(out, "w") as f, open(f"{stem}.raw.jsonl", "w") as fraw:
-    for k in range(6):
-        # Eval branches after k rounds: same prefix for all 100 sets of a user, so vLLM prefix caching reuses it.
-        convs = [
-            h + [{"role": "user", "content": pre + question(s)}]
-            for h, pre in zip(hist, pending)
-            for s in sets
-        ]
-        fails = correct = 0
-        for i, text in enumerate(run(convs)):
-            u, j = divmod(i, len(sets))
-            rec = parse(visible(text))
-            fraw.write(
-                json.dumps(
-                    {
-                        "kind": "eval",
-                        "user": u,
-                        "n_obs": k,
-                        "set": j,
-                        "text": text,
-                        "rec": rec,
-                    }
+    with open(out, "w") as f, open(f"{stem}.raw.jsonl", "w") as fraw:
+        for k in range(6):
+            # Eval branches after k rounds: same prefix for all 100 sets of a user, so vLLM prefix caching reuses it.
+            convs = [
+                h + [{"role": "user", "content": pre + question(s)}]
+                for h, pre in zip(hist, pending)
+                for s in sets
+            ]
+            fails = correct = 0
+            for i, text in enumerate(run(convs)):
+                u, j = divmod(i, len(sets))
+                rec = parse(visible(text))
+                fraw.write(
+                    json.dumps(
+                        {
+                            "kind": "eval",
+                            "user": u,
+                            "n_obs": k,
+                            "set": j,
+                            "text": text,
+                            "rec": rec,
+                        }
+                    )
+                    + "\n"
                 )
-                + "\n"
-            )
-            if rec is None:
-                fails += 1
-                rec = rng.randrange(
-                    3
-                )  # counts as chance; the failure rate is reported in stats
-            correct += rec == labels[u][j]
-            f.write(json.dumps({"user": u, "n_obs": k, "set": j, "rec": rec}) + "\n")
-        stats["eval"][k] = {
-            "parse_fail": fails / len(convs),
-            "accuracy": correct / len(convs),
-        }
-        print(f"n_obs={k}", stats["eval"][k], flush=True)
-        if k == 5:
-            break
-
-        # Interaction round k+1 on the main conversation; feedback depends on the model's own answer.
-        convs = [
-            h + [{"role": "user", "content": pre + question(r["rounds"][k]["options"])}]
-            for h, pre, r in zip(hist, pending, rows)
-        ]
-        fails = 0
-        for u, (conv, text, r) in enumerate(zip(convs, run(convs), rows)):
-            ans, choice = visible(text), r["rounds"][k]["user_idx"]
-            rec = parse(ans)
-            fraw.write(
-                json.dumps(
-                    {
-                        "kind": "interaction",
-                        "user": u,
-                        "round": k + 1,
-                        "text": text,
-                        "rec": rec,
-                    }
+                if rec is None:
+                    fails += 1
+                    rec = rng.randrange(
+                        3
+                    )  # counts as chance; the failure rate is reported in stats
+                correct += rec == labels[u][j]
+                f.write(
+                    json.dumps({"user": u, "n_obs": k, "set": j, "rec": rec}) + "\n"
                 )
-                + "\n"
-            )
-            hist[u] = conv + [
-                {"role": "assistant", "content": ans}
-            ]  # raw visible answer, thinking stripped
-            if (
-                rec is None
-            ):  # no answer to grade, so only the user's choice is revealed (not in the paper)
-                fails += 1
-                fb = f"I prefer Flight {choice + 1}."
-            elif rec == choice:
-                fb = f"Your option Flight {rec + 1} is correct."
-            else:
-                fb = f"Your option Flight {rec + 1} is incorrect. I prefer Flight {choice + 1}."
-            pending[u] = fb + "\n\n"
-        stats["interaction"][k + 1] = {"parse_fail": fails / len(rows)}
+            stats["eval"][k] = {
+                "parse_fail": fails / len(convs),
+                "accuracy": correct / len(convs),
+            }
+            print(f"n_obs={k}", stats["eval"][k], flush=True)
+            if k == 5:
+                break
 
-Path(f"{stem}.stats.json").write_text(json.dumps(stats, indent=2))
-keys = {(d["user"], d["n_obs"], d["set"]) for d in map(json.loads, open(out))}
-assert len(keys) == len(rows) * 6 * len(sets), "missing or duplicate predictions"
-print("wrote", out, len(keys), "predictions")
+            # Interaction round k+1 on the main conversation; feedback depends on the model's own answer.
+            convs = [
+                h
+                + [
+                    {
+                        "role": "user",
+                        "content": pre + question(r["rounds"][k]["options"]),
+                    }
+                ]
+                for h, pre, r in zip(hist, pending, rows)
+            ]
+            fails = 0
+            for u, (conv, text, r) in enumerate(zip(convs, run(convs), rows)):
+                ans, choice = visible(text), r["rounds"][k]["user_idx"]
+                rec = parse(ans)
+                fraw.write(
+                    json.dumps(
+                        {
+                            "kind": "interaction",
+                            "user": u,
+                            "round": k + 1,
+                            "text": text,
+                            "rec": rec,
+                        }
+                    )
+                    + "\n"
+                )
+                hist[u] = conv + [
+                    {"role": "assistant", "content": ans}
+                ]  # raw visible answer, thinking stripped
+                if (
+                    rec is None
+                ):  # no answer to grade, so only the user's choice is revealed (not in the paper)
+                    fails += 1
+                    fb = f"I prefer Flight {choice + 1}."
+                elif rec == choice:
+                    fb = f"Your option Flight {rec + 1} is correct."
+                else:
+                    fb = f"Your option Flight {rec + 1} is incorrect. I prefer Flight {choice + 1}."
+                pending[u] = fb + "\n\n"
+            stats["interaction"][k + 1] = {"parse_fail": fails / len(rows)}
+
+    Path(f"{stem}.stats.json").write_text(json.dumps(stats, indent=2))
+    keys = {(d["user"], d["n_obs"], d["set"]) for d in map(json.loads, open(out))}
+    assert len(keys) == len(rows) * 6 * len(sets), "missing or duplicate predictions"
+    print("wrote", out, len(keys), "predictions")
+
+
+# vLLM may start its engine with multiprocessing "spawn", which re-imports this file.
+# Everything with side effects (arg parsing, model loading, the run) must stay behind this guard.
+if __name__ == "__main__":
+    main()
