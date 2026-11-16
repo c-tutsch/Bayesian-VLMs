@@ -69,3 +69,23 @@
 (MainProcess pid=1694026) INFO 11-15 13:26:11 [hf.py:736] Detected the chat template content format to be 'string'. You can set `--chat-template-content-format` to override this.
 n_obs=0 {'parse_fail': 0.0, 'accuracy': 0.3447275641025641}
 n_obs=1 {'parse_fail': 0.0, 'accuracy': 0.4230769230769231}
+n_obs=2 {'parse_fail': 0.0, 'accuracy': 0.45958333333333334}
+n_obs=3 {'parse_fail': 0.0, 'accuracy': 0.47123397435897435}
+n_obs=4 {'parse_fail': 0.0, 'accuracy': 0.4786698717948718}
+n_obs=5 {'parse_fail': 0.0, 'accuracy': 0.4908653846153846}
+wrote results/flight_qwen2.5-32b.jsonl 374400 predictions
+(MainProcess pid=1694026) INFO 11-15 15:44:24 [utils.py:628] [shutdown] Process manager: send sigterm to process EngineCore
+(EngineCore pid=1694149) INFO 11-15 15:44:24 [core.py:1525] [shutdown] EngineCore: trigger received signal=SIGTERM
+(EngineCore pid=1694149) INFO 11-15 15:44:24 [core.py:1712] [shutdown] EngineCore: start mode=abort timeout=0s
+(EngineCore pid=1694149) INFO 11-15 15:44:24 [core.py:1743] [shutdown] EngineCore: request processing complete; starting resource teardown
+(EngineCore pid=1694149) INFO 11-15 15:44:24 [core.py:1573] [shutdown] EngineCore: exiting busy loop
+(EngineCore pid=1694149) INFO 11-15 15:44:24 [multiproc_executor.py:580] [shutdown] Executor: waiting for worker exit count=2
+(Worker_TP0 pid=1694159) INFO 11-15 15:44:24 [multiproc_executor.py:944] Parent process exited, terminating worker queues
+(EngineCore pid=1694149) INFO 11-15 15:44:27 [multiproc_executor.py:587] [shutdown] Executor: all workers exited gracefully
+(MainProcess pid=1694026) WARNING 11-15 15:44:27 [utils.py:648] [shutdown] Process manager: force killing remaining processes count=1
+(MainProcess pid=1694026) WARNING 11-15 15:44:27 [core_client.py:839] [shutdown] MPClient: engine core exited unexpectedly; starting cleanup
+(MainProcess pid=1694026) WARNING 11-15 15:44:27 [utils.py:653] [shutdown] Process manager: force killing remaining process EngineCore pid 1694149
+(MainProcess pid=1694026) INFO 11-15 15:44:27 [core_client.py:792] [shutdown] MPClient: start timeout=default
+(MainProcess pid=1694026) INFO 11-15 15:44:27 [core_client.py:794] [shutdown] MPClient: stopping engine manager
+(MainProcess pid=1694026) INFO 11-15 15:44:27 [core_client.py:796] [shutdown] MPClient: engine manager stopped
+(MainProcess pid=1694026) INFO 11-15 15:44:27 [core_client.py:797] [shutdown] MPClient: cleaning up background resources
