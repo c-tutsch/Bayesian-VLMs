@@ -10,7 +10,11 @@ from PIL import Image, ImageDraw, ImageFont
 
 FLIGHT_RE = re.compile(r'Flight\s+([123])\s*:\s*departure time:\s*([^,\n]+),\s*duration:\s*([^,\n]+),\s*number of stops:\s*(\d+),\s*price:\s*\$([\d,]+)', re.I)
 PICK_RE = re.compile(r'The best option is Flight\s+([123])', re.I)
-
+FEEDBACK_RE = re.compile(
+    r'Your option Flight ([123]) is (correct|incorrect)'
+    r'(?:\. I prefer Flight ([123]))?',
+    re.I
+)
 
 def font(size, bold=False):
     candidates = (["/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"] if bold else ["/System/Library/Fonts/Supplemental/Arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"])
@@ -36,24 +40,34 @@ def records(path):
 
 
 def extract(path):
-    samples=[]
-    for record_no, rec in enumerate(records(path),1):
-        pending=None
-        round_no=0
-        for msg in rec.get('messages',[]):
-            content=msg.get('content','')
-            if not isinstance(content,str): continue
-            if msg.get('role')=='user':
-                matches=FLIGHT_RE.findall(content)
-                if len(matches)==3 and {m[0] for m in matches}=={'1','2','3'}:
-                    round_no+=1
-                    pending={'record_idx':rec.get('idx',record_no),'record_no':record_no,'round':round_no,'flights':matches,'selected':None}
-                    samples.append(pending)
-            elif msg.get('role')=='assistant' and pending is not None:
-                match=PICK_RE.search(content)
-                if match: pending['selected']=match.group(1)
+    samples = []
+
+    for record_no, rec in enumerate(records(path), 1):
+        round_no = 0
+
+        for msg in rec.get('messages', []):
+            if msg.get('role') != 'user':
+                continue
+
+            content = msg.get('content', '')
+
+            if not isinstance(content, str):
+                continue
+
+            matches = FLIGHT_RE.findall(content)
+
+            if len(matches) == 3 and {m[0] for m in matches} == {'1', '2', '3'}:
+                round_no += 1
+
+                samples.append({
+                    'record_idx': rec.get('idx', record_no),
+                    'record_no': record_no,
+                    'round': round_no,
+                    'flights': matches
+                })
 
     return samples
+
 
 def draw_sample(sample, path):
     width,height=1200,470
@@ -65,15 +79,17 @@ def draw_sample(sample, path):
     d.text((930,41),f'RECORD {sample["record_idx"]}  ·  ROUND {sample["round"]}',font=F_LABEL,fill='#66758e')
     for i,(number,departure,duration,stops,price) in enumerate(sorted(sample['flights'],key=lambda x:int(x[0]))):
         x=20+i*395; y=125; w=370; h=322
-        selected=(sample['selected']==number)
-        border='#13b65b' if selected else '#dfe5f0'
-        bg='#f0fff6' if selected else '#ffffff'
-        d.rounded_rectangle((x,y,x+w,y+h),radius=19,fill=bg,outline=border,width=3 if selected else 2)
+        d.rounded_rectangle(
+            (x, y, x+w, y+h),
+            radius=19,
+            fill='#ffffff',
+            outline='#dfe5f0',
+            width=2
+        )
+        
         d.rounded_rectangle((x+20,y+20,x+119,y+52),radius=9,fill='#eef2ff')
         d.text((x+34,y+28),f'FLIGHT {number}',font=F_BADGE,fill='#345eea')
-        if selected:
-            d.rounded_rectangle((x+219,y+20,x+348,y+52),radius=13,fill='#d7fbe5',outline='#13b65b',width=1)
-            d.text((x+233,y+28),'✓ SELECTED',font=F_BADGE,fill='#087c39')
+        
         d.text((x+22,y+81),'DEPARTURE',font=F_LABEL,fill='#66758e')
         d.text((x+22,y+106),departure,font=F_VALUE,fill='#18243b')
         d.text((x+210,y+81),'DURATION',font=F_LABEL,fill='#66758e')
@@ -89,22 +105,53 @@ def draw_sample(sample, path):
     img.save(path)
 
 
-def main():
-    p=argparse.ArgumentParser()
-    p.add_argument('--jsonl',type=Path,default=Path('data/train/bayesian.jsonl'))
-    p.add_argument('--out',type=Path,default=Path('output/png'))
-    p.add_argument('--count',type=int,default=None,help='Optional limit; omit for all rounds')
-    args=p.parse_args()
-    if not args.jsonl.is_file(): p.error(f'File not found: {args.jsonl}; pass --jsonl PATH_TO_BAYESIAN_FILE')
-    args.out.mkdir(parents=True,exist_ok=True)
-    manifest=[]
-    for sample in extract(args.jsonl):
-        if args.count is not None and len(manifest)>=args.count: break
-        filename=f'record_{sample["record_no"]:04d}_round_{sample["round"]:02d}.png'
-        draw_sample(sample,args.out/filename)
-        manifest.append({'file':filename,'record_idx':sample['record_idx'],'round':sample['round'],'selected':sample['selected']})
-    (args.out/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
-    print(f'Generated {len(manifest)} PNGs in {args.out.resolve()}')
-    print(f'{sum(x["selected"] is None for x in manifest)} questions had no assistant selection and were left unhighlighted.')
 
-if __name__=='__main__': main()
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument('--jsonl', type=Path, default=Path('data/train/bayesian.jsonl'))
+    p.add_argument('--out', type=Path, default=Path(__file__).resolve().parent / 'output/png')
+    p.add_argument('--count', type=int, default=None, help='Optional limit; omit for all records')
+
+    args = p.parse_args()
+
+    if not args.jsonl.is_file():
+        p.error(f'File not found: {args.jsonl}; pass --jsonl PATH_TO_BAYESIAN_FILE')
+
+    args.out.mkdir(parents=True, exist_ok=True)
+
+    # Extract all flight questions
+    samples = extract(args.jsonl)
+
+    # Keep only the latest round for each record
+    latest_per_record = {}
+
+    for sample in samples:
+        latest_per_record[sample['record_no']] = sample
+
+    manifest = []
+
+    for sample in latest_per_record.values():
+
+        if args.count is not None and len(manifest) >= args.count:
+            break
+
+        filename = f'record_{sample["record_no"]:05d}_round_{sample["round"]:02d}.png'
+
+        draw_sample(sample, args.out / filename)
+
+        manifest.append({
+            'file': filename,
+            'record_idx': sample['record_idx'],
+            'round': sample['round']
+        })
+
+    (args.out / 'manifest.json').write_text(
+        json.dumps(manifest, indent=2),
+        encoding='utf-8'
+    )
+
+    print(f'Generated {len(manifest)} PNGs in {args.out.resolve()}')
+
+
+if __name__ == '__main__':
+    main()

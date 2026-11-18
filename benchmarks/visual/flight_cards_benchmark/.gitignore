@@ -4,9 +4,9 @@ venv/
 __pycache__/
 *.pyc
 
-# Generated files
-output/
-Random samples/
+# Generated images
+/output/
+/Random samples/
 
 # macOS
 .DS_Store
