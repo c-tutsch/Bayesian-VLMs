@@ -48,6 +48,38 @@ A full file has 624 × 6 × 100 = 374,400 lines. For a subset, declare it with `
 - **User order.** `user` is the row number in the interaction file, not a position in any shuffled or re-sorted list.
 - **Set order.** `set` follows the order of `all_options` in the held-out file; do not re-sort the sets or the options inside a set.
 
+## Comparing runs
+
+Every command takes the same `--users`, `--n-obs` and `--sets` flags as `evaluate_file.py` (default `all`, i.e. full files), and exits with code 1 on any validation error. Run files are passed as `NAME=PATH`. The `+-` values are the standard error of the mean over users, which is not comparable to the paper's error bars.
+
+1. Score a single file:
+
+   ```bash
+   python scripts/evaluate_file.py path/to/run.jsonl --name MODEL
+   ```
+
+2. Compare several runs with each other and with the Bayesian and oracle references. The command prints success, agreement and fail rate for each run at each `n_obs`. It can also write the table as Markdown, CSV or JSON, a line plot and a bar plot at rounds 1 and 5. `--note` sets the caption under the plots, for example to say that this is a single seed, non-thinking, with prefilled answers:
+
+   ```bash
+   python scripts/compare_runs.py model-a=path/to/run_a.jsonl model-b=path/to/run_b.jsonl \
+       --table-md outputs/compare.md --table-csv outputs/compare.csv --table-json outputs/compare.json \
+       --plot outputs/compare.png --plot-rounds outputs/compare_rounds.png --note "single seed, non-thinking"
+   ```
+
+3. Paired comparison of two files on the same `(user, n_obs, set)` cases, for example text vs OCR input. The command prints success of A and B, the difference B - A with a paired SE over users, agreement per file, the share of changed recommendations and the direction of each change (correct->wrong, wrong->correct, wrong->wrong, null involved). If the two files do not cover the same cases it stops with an error. With `--intersect` it uses only the shared cases and reports how many there are:
+
+   ```bash
+   python scripts/paired_compare.py text=path/to/text_run.jsonl ocr=path/to/ocr_run.jsonl --table-md outputs/paired.md
+   python scripts/paired_compare.py text=path/to/text_run.jsonl ocr=path/to/ocr_run.jsonl --users 0-49 --intersect
+   ```
+
+4. Deviation from approximate paper values. For each run with a matching name, and for `bayesian` / `oracle`, the command reports `deviation = ours - paper` and `deviation / SE`. This is a report, not a pass/fail test. The JSON format is documented in `scripts/compare_runs.py`. `docs/paper_approx_example.json` holds approximate values read from the paper's figures for `qwen2.5-7b`, `qwen2.5-32b` and `bayesian`:
+
+   ```bash
+   python scripts/compare_runs.py qwen2.5-7b=path/to/run_7b.jsonl qwen2.5-32b=path/to/run_32b.jsonl \
+       --paper-approx docs/paper_approx_example.json
+   ```
+
 ## Validation
 
 Expected success over 624 users × 100 held-out sets:

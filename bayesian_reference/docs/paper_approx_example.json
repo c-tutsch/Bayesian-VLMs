@@ -1,0 +1,13 @@
+{
+ "description": "APPROXIMATE accuracies of Qiu et al. (Nature Communications 2026), flight task, read from the paper's figures (not exact; reading error of about 1-2 points). Keys: run name (as in NAME=PATH) or 'bayesian' / 'oracle'; inner keys: n_obs.",
+ "values": {
+  "qwen2.5-7b": {"1": 0.37, "5": 0.37},
+  "qwen2.5-32b": {"1": 0.42, "5": 0.49},
+  "bayesian": {"1": 0.58, "5": 0.81}
+ },
+ "sources": {
+  "qwen2.5-7b": "approximate, read from paper figures; value taken from the BVLM-17 task description, not verified by us against the figures",
+  "qwen2.5-32b": "approximate, read from paper figures; value taken from the BVLM-17 task description, not verified by us against the figures",
+  "bayesian": "approximate, read from paper figures (Fig. G18, see README_internal.md section 8)"
+ }
+}

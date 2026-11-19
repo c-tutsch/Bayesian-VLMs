@@ -69,6 +69,10 @@ SHIFT_DIAG_MIN_N_OBS = 1
 # scripts/evaluate_file.py prints a WARNING if the fraction of "rec": null records exceeds this at any n_obs.
 FAIL_RATE_WARN = 0.05
 
+# scripts/compare_runs.py: deviation / SE is reported as NaN when SE <= this. Chosen by us, not from the paper:
+# the Bayesian reference at n_obs = 0 is exactly 1/3 for every user, but its float SE is ~4e-17, not 0.
+DEVIATION_SE_MIN = 1e-12
+
 # Data locations, relative to the repository root (./data is gitignored).
 DATA_DIR = "data"
 EVAL_INTERACTION_PATH = "data/eval/interaction/flight.jsonl"
