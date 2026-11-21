@@ -34,15 +34,15 @@ python run_flight.py --limit-users 3 --out results/test-run.jsonl
 mkdir -p slurm_logs && sbatch run_flight.sh --model Qwen/Qwen2.5-7B-Instruct --out results/flight_qwen2.5-7b.jsonl
 ```
 
-| Option             | Meaning                                                                        |
-| ------------------ | ------------------------------------------------------------------------------ |
-| `--model`          | Hugging Face id (default `Qwen/Qwen2.5-7B-Instruct`)                           |
-| `--limit-users`    | First N users only, for testing (the output then fails `evaluate_predictions`) |
-| `--thinking`       | Reasoning on (default off)                                                     |
-| `--max-new-tokens` | Output limit per answer (default 256, raise for thinking models)               |
-| `--max-model-len`  | vLLM context length (default 8192)                                             |
-| `--tp`             | Tensor-parallel GPUs, e.g. `--tp 2` with `sbatch --gres=gpu:2`                 |
-| `--dry-run`        | Fake model, no GPU: checks only the pipeline and output format                 |
+| Option            | Meaning                                                                        |
+| ----------------- | ------------------------------------------------------------------------------ |
+| `--model`         | Hugging Face id (default `Qwen/Qwen2.5-7B-Instruct`)                           |
+| `--limit-users`   | First N users only, for testing (the output then fails `evaluate_predictions`) |
+| `--thinking`      | Reasoning on (default off)                                                     |
+| `--think-budget`  | Token budget for thinking output (default 4096)                                |
+| `--max-model-len` | vLLM context length (default 16384), raise if raising thinking budget          |
+| `--tp`            | Tensor-parallel GPUs, e.g. `--tp 2` with `sbatch --gres=gpu:2`                 |
+| `--dry-run`       | Fake model, no GPU: checks only the pipeline and output format                 |
 
 One L40S (48 GB) fits models up to about 20B parameters in bf16. Qwen2.5-32B needs `--tp 2`.
 
