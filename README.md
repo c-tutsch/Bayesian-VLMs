@@ -216,39 +216,6 @@ preserves the three original flight descriptions per offer. To generate
 diagram cards in a new parent directory, pass `--out` to the diagram generator.
 The two diagram sets will be written into that directory.
 
-### Compare four flight input formats (BVLM-14)
-
-Start [Ollama](https://docs.ollama.com/macos) and download the model once with
-`ollama pull qwen3.5:9b`. Generate all three picture sets as described above.
-From the repository root, run:
-
-```bash
-python3 benchmarks/visual/run_flight_pair.py --all-formats --model qwen3.5:9b \
-  --users 0 623 --sets 1 2 3 4 5 --n-obs 0 2 5 \
-  --out data/generated/bvlm-14-four-formats-qwen9b
-```
-
-This sends 30 matched cases to the same model in each of the four formats.
-Earlier user choices remain in the text of every prompt. Only the flight
-offers change representation. The held-out choice is used for scoring.
-
-- `text.jsonl`, `ocr.jsonl`, `diagrams.jsonl` and `diagrams-noise.jsonl`
-  contain valid predictions in the team schema. All IDs and `rec` are zero-based.
-- `responses.jsonl` keeps every raw reply and its timing, including invalid
-  replies. Invalid replies count as incorrect.
-- `summary.json` reports accuracy and agreement with text overall and by
-  the number of earlier observations. `run.json` records model and run settings.
-
-You can add `--bayes-reference PATH` to compare with a previously computed
-Bayesian reference. Use a JSON list with `user`, `n_obs`, `set`, `target`
-and `bayes_recs` (a list of optimal zero-based flight indices) for each
-case. The summary reports model agreement only on uniquely recommended cases.
-Bayes accuracy uses the expected score under uniform tie-breaking.
-
-Omit `--all-formats` for the original text/OCR pilot. Its default case is
-user 0, test set 1 with two earlier choices. Use a new output directory for
-each run. This pilot supplies fixed histories to all formats.
-
 ### Training data and validation
 
 `prepare_training.py` validates and copies the two official teacher files to
@@ -272,3 +239,90 @@ The included four-feature evaluation artifact uses seed 0, whereas the paper
 reports multiple seeds. One heldout set also occurs in user 0's first observed
 round; we preserve this source fact. Preparing this archive alone is therefore
 not a complete reproduction of every paper result.
+
+### Ada four-format benchmark (BVLM-14)
+
+The Ada runner evaluates the official BF16 Qwen3.5-9B checkpoint with vLLM.
+It follows the interactive text reference at commit
+[9128b3f](https://github.com/c-tutsch/Bayesian-VLMs/tree/9128b3fc4ab31ac16972010eed8eff654d3c2fb7/benchmarks/text).
+For each format, the model recommends a flight in each history round and receives
+the same stored user choice as feedback. Its own previous answers remain in
+the conversation. Held-out queries branch off from that conversation. Their
+answers and labels stay out of the observed history.
+
+Use Python 3.12 on Ada. These commands create a private environment with the
+vLLM version used here. Generate or transfer the OCR, diagram and noise PNGs and
+their manifests, then run the benchmark from the repository root.
+
+~~~bash
+ENV="$HOME/bvlm14-ada-env"
+python3 -m venv --without-pip "$ENV"
+python3 -m pip --python "$ENV/bin/python" install pip 'vllm==0.34.0'
+export BVLM_PYTHON="$ENV/bin/python"
+export PATH="$ENV/bin:$PATH"
+~~~
+
+If a compute node reports that Python.h is missing, use the matching Python 3.12
+headers from the Ada login node. Export the include paths before calling sbatch
+so Slurm passes them through to the compiler.
+
+~~~bash
+HEADERS="$HOME/bvlm14-python-headers"
+mkdir -p "$HEADERS/x86_64-linux-gnu"
+cp -a /usr/include/python3.12 "$HEADERS/"
+cp -a /usr/include/x86_64-linux-gnu/python3.12 "$HEADERS/x86_64-linux-gnu/"
+export C_INCLUDE_PATH="$HEADERS/python3.12:$HEADERS"
+export CPLUS_INCLUDE_PATH="$C_INCLUDE_PATH"
+~~~
+
+Keep the model revision fixed across jobs. For a small pipeline check, the
+optional smoke test uses two users, two offers and three observation counts.
+
+~~~bash
+REV=c202236235762e1c871ad0ccb60c8ee5ba337b9a
+FULL=data/generated/bvlm-14-ada-qwen35-9b-bf16
+mkdir -p data/generated/ada-slurm
+
+# Optional smoke test
+sbatch --parsable --time=00:30:00 benchmarks/visual/run_flight_ada.sh \
+  --revision "$REV" --out data/generated/bvlm-14-ada-smoke
+~~~
+
+The full benchmark uses 32 shards with up to eight simultaneous GPU jobs.
+Adjust concurrency to the available resources. Preserve the shard count and
+settings when resubmitting a failed shard.
+
+~~~bash
+sbatch --parsable --time=04:00:00 --array=0-31%8 benchmarks/visual/run_flight_ada.sh \
+  --revision "$REV" --full --shards 32 --out "$FULL"
+~~~
+
+The full grid holds 624 users × 100 offers × 6 observation counts for each
+format. The completed Ada run includes 1,497,600 validated predictions across
+all four formats. Open the [metrics table](benchmarks/visual/results/ada-qwen35-9b-bf16/metrics.csv)
+or the [shareable plot and round-by-round table](benchmarks/visual/results/ada-qwen35-9b-bf16/comparison.png).
+
+Completed round files are checkpoints. Run the summarizer after all
+jobs finish. It verifies exact case coverage and creates one merged JSONL file
+per format for the team evaluator. The report contains the measured results
+for the four input formats from that run.
+
+~~~bash
+python3 benchmarks/visual/summarize_flight_ada.py --run "$FULL" \
+  --out benchmarks/visual/results/ada-qwen35-9b-bf16 --plot
+~~~
+
+Install matplotlib in the analysis environment for `--plot`. The report
+directory is part of the repository and holds the compact `metrics.csv`,
+`summary.json` and `accuracy.png`. The full report also generates
+`comparison.png` with a table of scores by round. The ignored run directory
+holds the logs, round checkpoints and merged predictions. Metrics use the
+stored held-out choice as the target. Unparseable responses stay in the
+denominator and are exported as `rec: null`. The merged files use the
+[BVLM-9 evaluator](https://github.com/c-tutsch/Bayesian-VLMs/tree/eren-bvlm-9-bayesian-reference/bayesian_reference)
+prediction schema.
+
+The optional smoke test and local runner
+(`python3 benchmarks/visual/run_flight_pair.py --help`) can be used to check
+the pipeline. Keep their outputs under `data/generated/`. Figures and metrics
+from `--dry-run` are synthetic.
