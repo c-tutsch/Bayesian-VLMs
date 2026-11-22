@@ -182,8 +182,7 @@ def main():
                     })
                     rec = recommendation(response["message"]["content"])
                     raw.write(json.dumps({**ids, "mode": mode, "rec": rec, "response": response}) + "\n")
-                    if rec is not None:
-                        predictions[mode].write(json.dumps({**ids, "rec": rec}) + "\n")
+                    predictions[mode].write(json.dumps({**ids, "rec": rec}) + "\n")
                     pair[mode] = rec
                 # Use the stored choice only for scoring.
                 _, _, pair["answer"] = dataset.offer(case["user"], case["set"])
