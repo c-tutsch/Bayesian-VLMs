@@ -10,6 +10,11 @@ With --thinking, generation has two phases:
   2. The script closes the thought itself (with a short "answer now" nudge if the budget ran out), pre-fills
      "The best option is Flight" and lets the model complete only the flight number, exactly as without thinking.
 The rate of thoughts cut off by the budget is reported in the stats as think_truncated.
+Thinking samples with the Qwen3.5 recommended settings (THINK_SAMPLING) and a fixed seed per request,
+because greedy thinking tends to loop until the budget runs out. --think-greedy switches back to greedy.
+
+A run can cover a seeded random subset of users and option sets (--n-users, --n-sets) and score only some n_obs
+(--eval-n-obs); see plot_sampling.py for how large a subset must be. Output ids always refer to the full dataset.
 
 Writes:
   <out>              {"user", "n_obs", "set", "rec"} per line, 624*6*100 = 374,400 lines (input for evaluate_predictions)
@@ -19,7 +24,7 @@ where <stem> is <out> without its .jsonl extension.
 
   python run_flight.py --model Qwen/Qwen2.5-7B-Instruct --out results/flight_qwen2.5-7b.jsonl
   python run_flight.py --model Qwen/Qwen3.5-9B --thinking --out results/flight_qwen3.5-9b-think.jsonl
-  python run_flight.py --limit-users 3 --out results/test-run.jsonl  # quick test on an interactive GPU node
+  python run_flight.py --n-users 3 --out results/test-run.jsonl  # quick test on an interactive GPU node
   python run_flight.py --dry-run --out results/flight_dry.jsonl   # fake model, no GPU/vLLM: checks the pipeline
 """
 
@@ -42,6 +47,19 @@ PREFILL = "The best option is Flight"
 
 # End-of-thought tag found in the tokenizer vocab -> text the script writes to close a thought.
 THINK_CLOSE = {"</think>": "\n</think>\n\n", "<channel|>": "<channel|>"}
+# n_obs=0 prompts are the same for every user. Greedy needs one answer per distinct prompt; sampling draws up to this
+# many, so the n_obs=0 accuracy doesn't hinge on single samples (noise sd <= 0.5/sqrt(50 * n_sets)).
+SAMPLES_PER_PROMPT = 50
+# Thinking sampling, "thinking mode for general tasks" from the Qwen3.5 model card. The model ships no
+# generation_config.json, so vLLM would fall back to plain temperature 1.0. One setting for all models,
+# make it a flag when a model with different recommendations is benchmarked.
+THINK_SAMPLING = {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 1.5,
+}
 # Appended before the close when the budget runs out (budget forcing as described in the Qwen3 model cards).
 NUDGE = "\n\nConsidering the limited time, I have to give the solution based on the thinking directly now."
 
@@ -56,6 +74,11 @@ p.add_argument(
     type=int,
     default=4096,
     help="max thinking tokens per answer; longer thoughts are cut off and closed by the script",
+)
+p.add_argument(
+    "--think-greedy",
+    action="store_true",
+    help="greedy thinking instead of THINK_SAMPLING (prone to repetition loops)",
 )
 p.add_argument(
     "--think-close",
@@ -74,12 +97,24 @@ p.add_argument(
     help="tensor parallel GPUs, e.g. 2 for Qwen2.5-32B on L40S",
 )
 p.add_argument(
-    "--seed", type=int, default=0, help="for the random fallback on unparseable answers"
+    "--seed",
+    type=int,
+    default=0,
+    help="for the user/set subset, thinking samples and the random fallback on unparseable answers",
 )
 p.add_argument(
-    "--limit-users",
+    "--n-users", type=int, help="seeded random subset of N users (default all 624)"
+)
+p.add_argument(
+    "--n-sets",
     type=int,
-    help="first N users only (output then fails the 374,400-line check)",
+    help="seeded random subset of N held-out option sets (default all 100)",
+)
+p.add_argument(
+    "--eval-n-obs",
+    type=lambda s: sorted({int(k) for k in s.split(",")}),
+    default=list(range(6)),
+    help="comma-separated n_obs to score, e.g. 0,5 (default 0,1,2,3,4,5); interaction stops after the largest",
 )
 p.add_argument("--dry-run", action="store_true")
 
@@ -182,8 +217,12 @@ def make_generate(args):
         )
     end_id = vocab[end]
     close = args.think_close or THINK_CLOSE[end]
+    if args.think_greedy:
+        sampling = {"temperature": 0}
+    else:
+        sampling = THINK_SAMPLING
     print(
-        f"thinking: stop at {end!r}, close with {close!r}, budget {args.think_budget}",
+        f"thinking: stop at {end!r}, close with {close!r}, budget {args.think_budget}, sampling {sampling}",
         flush=True,
     )
 
@@ -212,11 +251,13 @@ def make_generate(args):
             [{"prompt_token_ids": x} for x in prompts],
             [
                 SamplingParams(
-                    temperature=0,
+                    **sampling,
+                    seed=args.seed
+                    + i,  # reproducible, and different for repeats of the same prompt
                     max_tokens=max(1, min(args.think_budget, r)),
                     stop_token_ids=[end_id],
                 )
-                for r in room
+                for i, r in enumerate(room)
             ],
             use_tqdm=True,
         )
@@ -241,19 +282,37 @@ def main():
     args = p.parse_args()
     generate = make_generate(args)
 
+    copies = 1 if args.think_greedy or not args.thinking else SAMPLES_PER_PROMPT
+
     def run(convs):
-        # Greedy, so identical prompts give identical answers: n_obs=0 has only 100 unique prompts, not 62,400.
-        keys = [json.dumps(c) for c in convs]
+        # Identical prompts give identical greedy answers, so each distinct prompt runs once (n_obs=0 has only
+        # n_sets distinct prompts); with sampling, up to `copies` times.
+        seen, keys = {}, []
+        for c in convs:
+            k = json.dumps(c)
+            seen[k] = seen.get(k, -1) + 1
+            keys.append((k, seen[k] % copies))
         uniq = list(dict.fromkeys(keys))
-        outs = dict(zip(uniq, generate([json.loads(k) for k in uniq])))
+        outs = dict(zip(uniq, generate([json.loads(k) for k, _ in uniq])))
         return [outs[k] for k in keys]
 
-    rows = [json.loads(line) for line in open(args.interaction)][: args.limit_users]
+    rows = [json.loads(line) for line in open(args.interaction)]
     held = json.load(open(args.heldout))
-    sets, labels = held["all_options"], [u["idxs"] for u in held["user_idxs"]]
     assert all(
-        r["reward_fn"] == u["reward_fn"] for r, u in zip(rows, held["user_idxs"])
+        r["reward_fn"] == u["reward_fn"]
+        for r, u in zip(rows, held["user_idxs"], strict=True)
     ), "user order mismatch"
+    pick = random.Random(args.seed)
+    user_ids = sorted(pick.sample(range(len(rows)), args.n_users or len(rows)))
+    set_ids = sorted(
+        pick.sample(
+            range(len(held["all_options"])), args.n_sets or len(held["all_options"])
+        )
+    )
+    rows = [rows[u] for u in user_ids]
+    sets = [held["all_options"][s] for s in set_ids]
+    labels = [[held["user_idxs"][u]["idxs"][s] for s in set_ids] for u in user_ids]
+    last = max(args.eval_n_obs)
 
     rng = random.Random(args.seed)
     hist = [
@@ -266,6 +325,10 @@ def main():
         "model": args.model,
         "thinking": args.thinking,
         "think_budget": args.think_budget if args.thinking else None,
+        "think_greedy": args.think_greedy if args.thinking else None,
+        "seed": args.seed,
+        "users": user_ids,  # to compare other runs on exactly the same subset
+        "sets": set_ids,
         "eval": {},
         "interaction": {},
     }
@@ -276,48 +339,53 @@ def main():
     )  # not with_suffix: model names contain dots (qwen2.5-7b)
 
     with open(out, "w") as f, open(f"{stem}.raw.jsonl", "w") as fraw:
-        for k in range(6):
-            # Eval branches after k rounds: same prefix for all 100 sets of a user, so vLLM prefix caching reuses it.
-            convs = [
-                h + [{"role": "user", "content": pre + question(s)}]
-                for h, pre in zip(hist, pending)
-                for s in sets
-            ]
-            fails = correct = cuts = 0
-            for i, (text, cut) in enumerate(run(convs)):
-                u, j = divmod(i, len(sets))
-                rec = parse(visible(text))
-                cuts += cut
-                fraw.write(
-                    json.dumps(
-                        {
-                            "kind": "eval",
-                            "user": u,
-                            "n_obs": k,
-                            "set": j,
-                            "text": text,
-                            "think_truncated": cut,
-                            "rec": rec,
-                        }
+        for k in range(last + 1):
+            if k in args.eval_n_obs:
+                # Eval branches after k rounds: same prefix for all sets of a user, so vLLM prefix caching reuses it.
+                convs = [
+                    h + [{"role": "user", "content": pre + question(s)}]
+                    for h, pre in zip(hist, pending)
+                    for s in sets
+                ]
+                fails = correct = cuts = 0
+                for i, (text, cut) in enumerate(run(convs)):
+                    u, j = divmod(i, len(sets))
+                    uid, sid = user_ids[u], set_ids[j]
+                    rec = parse(visible(text))
+                    cuts += cut
+                    fraw.write(
+                        json.dumps(
+                            {
+                                "kind": "eval",
+                                "user": uid,
+                                "n_obs": k,
+                                "set": sid,
+                                "text": text,
+                                "think_truncated": cut,
+                                "rec": rec,
+                            }
+                        )
+                        + "\n"
                     )
-                    + "\n"
-                )
-                if rec is None:
-                    fails += 1
-                    rec = rng.randrange(
-                        3
-                    )  # counts as chance; the failure rate is reported in stats
-                correct += rec == labels[u][j]
-                f.write(
-                    json.dumps({"user": u, "n_obs": k, "set": j, "rec": rec}) + "\n"
-                )
-            stats["eval"][k] = {
-                "parse_fail": fails / len(convs),
-                "think_truncated": cuts / len(convs),
-                "accuracy": correct / len(convs),
-            }
-            print(f"n_obs={k}", stats["eval"][k], flush=True)
-            if k == 5:
+                    if rec is None:
+                        fails += 1
+                        rec = rng.randrange(
+                            3
+                        )  # counts as chance; the failure rate is reported in stats
+                    correct += rec == labels[u][j]
+                    f.write(
+                        json.dumps({"user": uid, "n_obs": k, "set": sid, "rec": rec})
+                        + "\n"
+                    )
+                stats["eval"][k] = {
+                    "parse_fail": fails / len(convs),
+                    "think_truncated": cuts / len(convs),
+                    "accuracy": correct / len(convs),
+                }
+                print(f"n_obs={k}", stats["eval"][k], flush=True)
+                # Written every round so a job killed by the time limit still leaves stats behind.
+                Path(f"{stem}.stats.json").write_text(json.dumps(stats, indent=2))
+            if k == last:
                 break
 
             # Interaction round k+1 on the main conversation; feedback depends on the model's own answer.
@@ -340,7 +408,7 @@ def main():
                     json.dumps(
                         {
                             "kind": "interaction",
-                            "user": u,
+                            "user": user_ids[u],
                             "round": k + 1,
                             "text": text,
                             "think_truncated": cut,
@@ -368,7 +436,9 @@ def main():
 
     Path(f"{stem}.stats.json").write_text(json.dumps(stats, indent=2))
     keys = {(d["user"], d["n_obs"], d["set"]) for d in map(json.loads, open(out))}
-    assert len(keys) == len(rows) * 6 * len(sets), "missing or duplicate predictions"
+    assert len(keys) == len(rows) * len(args.eval_n_obs) * len(sets), (
+        "missing or duplicate predictions"
+    )
     print("wrote", out, len(keys), "predictions")
 
 
